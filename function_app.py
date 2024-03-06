@@ -3,10 +3,15 @@ import logging
 import os
 import builtins
 import re
+import sys
+import traceback
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 template = open("script_template.py", "br").read()
+
+
+# TODO: should convert all bytes objects to strs for easier handling
 
 
 def delete_files(files):
@@ -45,9 +50,19 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
     logging.warn("Executing script")
     try:
         exec(script_source, script_globals)
+    except SyntaxError as e:
+        line_number = e.lineno
+        line = script_source.decode("utf-8").splitlines()[line_number - 1]
+        msg = f"Syntax error: {e}\nline {line_number}: {line}"
+        logging.error(msg)
+        return func.HttpResponse(msg, status_code=400)
     except Exception as e:
-        logging.error(e)
-        return func.HttpResponse(str(e), status_code=500)
+        _, _, tb = sys.exc_info()
+        line_number = traceback.extract_tb(tb)[1].lineno
+        line = script_source.decode("utf-8").splitlines()[line_number - 1]
+        msg = f"Exception: {e}\nline {line_number}: {line}"
+        logging.error(msg)
+        return func.HttpResponse(msg, status_code=400)
 
     # Restore the open function and get the files created by the script
     builtins.open = builtin_open
