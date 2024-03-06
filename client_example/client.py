@@ -3,7 +3,7 @@ import requests
 seq = "epi"  # Provided examples: "gre", "tse", "epi"
 seq_script = f"client_example/write_{seq}.py"
 
-run_local = False
+run_local = True
 if run_local:
     url = "http://localhost:7071/api/httpscriptupload"
 else:
@@ -16,6 +16,6 @@ if response.status_code != 200:
 else:
     file_name = response.headers["Content-Disposition"].split('"')[1]
     path = f"client_example/{file_name}"
-    with open(path, "w") as f:
-        f.write(response.text)
+    with open(path, "wb") as f:
+        f.write(response.content)
     print(f"wrote {len(response.content)} bytes to {path}")
