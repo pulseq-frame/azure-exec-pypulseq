@@ -2,10 +2,11 @@ import azure.functions as func
 import logging
 import os
 import builtins
+import re
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-prelude = open("script_prelude.py", "rb").read()
+prelude = open("script_prelude.py", "r").read()
 
 
 def delete_files(files):
@@ -18,11 +19,27 @@ def delete_files(files):
             pass
 
 
+def prep_script(source: str) -> str:
+    # Un-escape if source is contained in a markdown code block
+    codeblock = re.search("```python(.*?)```", source, re.DOTALL)
+    if codeblock:
+        total_len = len(source)
+        source = codeblock.group(1)
+        logging.info(f"Extracted markdown code block: ({len(source)} / {total_len}) characters")
+    
+    # Add a seq.write if not contained in the code
+    if not re.search("seq.write\\(.*?\\)", source, re.DOTALL):
+        source += "\n# ! Added by azure-exec-pypulseq\nseq.write('external.seq')\n"
+        logging.info("Attached a seq.write(), as source did not contain one")
+
+    return prelude + source
+
+
 @app.route(route="HttpScriptUpload")
 def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
     # Prepare the environment the script runs in
     builtin_open = builtins.open
-    script_source = prelude + req.files.get("seq_script").read()
+    script_source = prep_script(req.files.get("seq_script").read())
     script_globals = {
         "__name__": "__main__",
         "__loader__": globals()["__loader__"],
