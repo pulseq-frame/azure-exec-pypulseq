@@ -5,10 +5,12 @@ import builtins
 import re
 import sys
 import traceback
+import json
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 template = open("script_template.py", "br").read()
+prelude_len = template.splitlines().index(b"# INSERT USER SCRIPT HERE")
 
 
 # TODO: should convert all bytes objects to strs for easier handling
@@ -30,9 +32,19 @@ def prep_script(source: bytes) -> bytes:
     if codeblock:
         total_len = len(source)
         source = codeblock.group(1)
-        logging.info(f"Extracted markdown code block: ({len(source)} / {total_len}) characters")
+        logging.info("Extracted markdown code block: "
+                     f"({len(source)} / {total_len}) characters")
 
     return template.replace(b"# INSERT USER SCRIPT HERE", source)
+
+
+def get_exec_exc_lines():
+    tb = traceback.extract_tb(sys.exc_info()[2])
+
+    for frame in reversed(tb):
+        if frame.filename == "<string>":
+            return (frame.lineno, frame.end_lineno)
+    return (1, 1)
 
 
 @app.route(route="HttpScriptUpload")
@@ -51,18 +63,26 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
     try:
         exec(script_source, script_globals)
     except SyntaxError as e:
-        line_number = e.lineno
-        line = script_source.decode("utf-8").splitlines()[line_number - 1]
-        msg = f"Syntax error: {e}\nline {line_number}: {line}"
-        logging.error(msg)
-        return func.HttpResponse(msg, status_code=400)
+        err = {
+            "error": "SyntaxError",
+            "msg": e.msg,
+            "line": e.lineno - prelude_len,
+            "text": e.text
+        }
+        logging.error(err)
+        return func.HttpResponse(json.dumps(err), status_code=400)
     except Exception as e:
-        _, _, tb = sys.exc_info()
-        line_number = traceback.extract_tb(tb)[1].lineno
-        line = script_source.decode("utf-8").splitlines()[line_number - 1]
-        msg = f"Exception: {e}\nline {line_number}: {line}"
-        logging.error(msg)
-        return func.HttpResponse(msg, status_code=400)
+        lineno, end_lineno = get_exec_exc_lines()
+        lines = script_source.decode("utf-8").splitlines()
+        text = "".join(line.strip() for line in lines[lineno - 1:end_lineno])
+        err = {
+            "error": type(e).__name__,
+            "msg": str(e),
+            "line": lineno - prelude_len,
+            "text": text
+        }
+        logging.error(err)
+        return func.HttpResponse(json.dumps(err), status_code=400)
 
     # Restore the open function and get the files created by the script
     builtins.open = builtin_open
@@ -77,13 +97,13 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
 
     else:
         # NOTE: If there are multiple .seq files, we just silently return
-        # the one that as created first. 
+        # the one that as created first.
         name, path = next(iter(files.items()))
         logging.info(f"Returning to client: {name} from {path}")
         seq_file = open(path, "rb").read()
 
         delete_files(files.keys())
-        
+
         # If the file is named 'fallback.seq' it is a sequence that the script
         # created but did not write to disk. If it's 'empty_fallback.seq', the
         # script did not create any sequence at all and we created a dummy.
