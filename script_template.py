@@ -12,7 +12,7 @@ import tempfile
 numpy.complex = complex
 numpy.float = float
 numpy.int = int
-    
+
 
 # Mock matploblib to supress plots from pulseq scripts
 sys.modules['matplotlib'] = MagicMock()
@@ -24,6 +24,7 @@ import pypulseq as pp
 builtin_Sequence = pp.Sequence
 sequences = []
 
+
 def Sequence(system=pp.Opts()):
     logging.info("Created Sequence object")
     seq = builtin_Sequence(system)
@@ -31,17 +32,19 @@ def Sequence(system=pp.Opts()):
     sequences.append(seq)
     return seq
 
+
 pp.Sequence = Sequence
 
 # Overwrite open() to use temp files as script directory is read-only
 builtin_open = builtins.open
-
 files = {}
+
 
 def tmp_open(file_name: str, mode):
     if file_name in files:
-        logging.info(f"tmp_open({file_name}, {mode}): returned {files[file_name]}")
-        return builtin_open(files[file_name], mode)
+        file = files[file_name]
+        logging.info(f"tmp_open({file_name}, {mode}): returned {file}")
+        return builtin_open(file, mode)
     elif file_name.endswith(".seq"):
         file = tempfile.NamedTemporaryFile(mode, delete=False)
         files[file_name] = file.name
@@ -50,6 +53,7 @@ def tmp_open(file_name: str, mode):
     else:
         logging.info(f"open({file_name}, {mode})")
         return builtin_open(file_name, mode)
+
 
 builtins.open = tmp_open
 
@@ -73,7 +77,7 @@ if len(files) == 0:
         pp.Sequence().write("emtpy_fallback.seq")
     else:
         logging.warning(
-            f"{len(sequences)} sequence object exist(s), but none were written "
-            "to a file, writing to 'fallback.seq'"
+            f"{len(sequences)} sequence object exist(s), but none were "
+            "written to a file, writing to 'fallback.seq'"
         )
         sequences[0].write("fallback.seq")

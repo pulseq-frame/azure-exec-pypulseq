@@ -6,18 +6,16 @@ import re
 import sys
 import traceback
 import json
+from time import time
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-template = open("script_template.py", "br").read()
-prelude_len = template.splitlines().index(b"# INSERT USER SCRIPT HERE")
-
-
-# TODO: should convert all bytes objects to strs for easier handling
+template = open("script_template.py", "r").read()
+prelude_len = template.splitlines().index("# INSERT USER SCRIPT HERE")
 
 
 def delete_files(files):
-    # We don't sanitize input - user code could call os.remove() itself anyways
+    # We don't need to sanitize input - user code could delete directly anyways
     for file in files:
         try:
             os.remove(file)
@@ -26,16 +24,16 @@ def delete_files(files):
             pass
 
 
-def prep_script(source: bytes) -> bytes:
+def prep_script(source):
     # Un-escape if source is contained in a markdown code block
-    codeblock = re.search(b"```python(.*?)```", source, re.DOTALL)
+    codeblock = re.search("```python(.*?)```", source, re.DOTALL)
     if codeblock:
         total_len = len(source)
         source = codeblock.group(1)
         logging.info("Extracted markdown code block: "
                      f"({len(source)} / {total_len}) characters")
 
-    return template.replace(b"# INSERT USER SCRIPT HERE", source)
+    return template.replace("# INSERT USER SCRIPT HERE", source)
 
 
 def get_exec_exc_lines():
@@ -51,17 +49,21 @@ def get_exec_exc_lines():
 def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
     # Prepare the environment the script runs in
     builtin_open = builtins.open
-    seq_script = req.files.get("seq_script").read()
+    seq_script = req.files.get("seq_script").read().decode("utf-8")
     logging.info(f"Recieved script ({len(seq_script)} bytes)")
+
     script_source = prep_script(seq_script)
     script_globals = {
         "__name__": "__main__",
         "__loader__": globals()["__loader__"],
         "__builtins__": globals()["__builtins__"].copy(),
     }
-    logging.warn("Executing script")
+    logging.info("Executing script")
     try:
+        start = time()
         exec(script_source, script_globals)
+        logging.info(f"Execution successful, took {time() - start} s")
+
     except SyntaxError as e:
         err = {
             "error": "SyntaxError",
@@ -71,6 +73,7 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
         }
         logging.error(err)
         return func.HttpResponse(json.dumps(err), status_code=400)
+
     except Exception as e:
         lineno, end_lineno = get_exec_exc_lines()
         lines = script_source.decode("utf-8").splitlines()
@@ -87,25 +90,19 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
     # Restore the open function and get the files created by the script
     builtins.open = builtin_open
     files = script_globals.get("files", {})
+    if len(files) > 1:
+        logging.warn(f"Script wrote multiple .seq files: {files.keys()}")
 
-    if len(files) == 0:
-        # the template has a fallback if seq.write is missing, we should always
-        # have at least one .seq file! If not, there is a bug somewhere
-        msg = "BUG: No .seq was written (not even fallback.seq)"
-        logging.error(msg)
-        return func.HttpResponse(msg, status_code=500)
+    # NOTE: The script template ensures there is at least one .seq file
+    # If there are multiple, we return the first (and warn about it)
+    name, path = next(iter(files.items()))
+    logging.info(f"Returning to client: {name} from {path}")
+    seq_file = open(path, "r").read()
 
-    else:
-        # NOTE: If there are multiple .seq files, we just silently return
-        # the one that as created first.
-        name, path = next(iter(files.items()))
-        logging.info(f"Returning to client: {name} from {path}")
-        seq_file = open(path, "rb").read()
+    delete_files(files.keys())
 
-        delete_files(files.keys())
-
-        # If the file is named 'fallback.seq' it is a sequence that the script
-        # created but did not write to disk. If it's 'empty_fallback.seq', the
-        # script did not create any sequence at all and we created a dummy.
-        headers = {"Content-Disposition": f'attachment; filename="{name}"'}
-        return func.HttpResponse(seq_file, headers=headers)
+    # If the file is named 'fallback.seq' it is a sequence that the script
+    # created but did not write to disk. If it's 'empty_fallback.seq', the
+    # script did not create any sequence at all and we created a dummy.
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    return func.HttpResponse(seq_file, headers=headers)
