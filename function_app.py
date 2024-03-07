@@ -14,6 +14,10 @@ template = open("script_template.py", "r").read()
 prelude_len = template.splitlines().index("# INSERT USER SCRIPT HERE")
 
 
+# TODO: there are a couple more potential exceptions, like when no script file was sent;
+# these should be handled and an appropriate HTML error code returned instead of crashing the app
+
+
 def delete_files(files):
     # We don't need to sanitize input - user code could delete directly anyways
     for file in files:
@@ -76,7 +80,7 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         lineno, end_lineno = get_exec_exc_lines()
-        lines = script_source.decode("utf-8").splitlines()
+        lines = script_source.splitlines()
         text = "".join(line.strip() for line in lines[lineno - 1:end_lineno])
         err = {
             "error": type(e).__name__,
