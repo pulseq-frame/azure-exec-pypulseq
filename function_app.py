@@ -42,11 +42,12 @@ def prep_script(source):
 
 def get_exec_exc_lines():
     tb = traceback.extract_tb(sys.exc_info()[2])
+    origin = tb[-1].line
 
     for frame in reversed(tb):
         if frame.filename == "<string>":
-            return (frame.lineno, frame.end_lineno)
-    return (1, 1)
+            return (frame.lineno, frame.end_lineno, origin)
+    return (1, 1, origin)
 
 
 @app.route(route="HttpScriptUpload")
@@ -72,21 +73,23 @@ def HttpScriptUpload(req: func.HttpRequest) -> func.HttpResponse:
         err = {
             "error": "SyntaxError",
             "msg": e.msg,
-            "line": e.lineno - prelude_len,
-            "text": e.text
+            "lineno": e.lineno - prelude_len,
+            "line": e.text,
+            "origin": ""
         }
         logging.error(err)
         return func.HttpResponse(json.dumps(err), status_code=400)
 
     except Exception as e:
-        lineno, end_lineno = get_exec_exc_lines()
+        lineno, end_lineno, origin = get_exec_exc_lines()
         lines = script_source.splitlines()
-        text = "".join(line.strip() for line in lines[lineno - 1:end_lineno])
+        line = "".join(line.strip() for line in lines[lineno - 1:end_lineno])
         err = {
             "error": type(e).__name__,
             "msg": str(e),
-            "line": lineno - prelude_len,
-            "text": text
+            "lineno": lineno - prelude_len,
+            "line": line,
+            "origin": origin
         }
         logging.error(err)
         return func.HttpResponse(json.dumps(err), status_code=400)
